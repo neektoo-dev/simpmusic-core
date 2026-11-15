@@ -100,6 +100,13 @@ interface MediaPlayerInterface {
         toShuffledIndex: Int,
     ) {}
 
+    /** Atomically keeps the active item/position and replaces its neighbours, or refuses unchanged. */
+    suspend fun replaceQueueKeepingCurrent(
+        seedId: String,
+        upcoming: List<GenericMediaItem>,
+        onReplaced: () -> Unit,
+    ): Boolean = false
+
     fun clearMediaItems()
 
     fun replaceMediaItem(

@@ -48,6 +48,7 @@ import org.koin.core.component.inject
 internal class LibraryTabCarScreen(
     carContext: CarContext,
     private val browserProvider: () -> ListenableFuture<MediaBrowser>,
+    private val playbackScreenProvider: () -> Screen,
 ) : Screen(carContext),
     KoinComponent {
     private val handler: MediaPlayerHandler by inject()
@@ -277,11 +278,11 @@ internal class LibraryTabCarScreen(
             }.setImage(image, GridItem.IMAGE_TYPE_LARGE)
             .setOnClickListener {
                 if (browsable) {
-                    screenManager.push(MediaListCarScreen(carContext, browserProvider, item.mediaId, title))
+                    screenManager.push(MediaListCarScreen(carContext, browserProvider, item.mediaId, title, playbackScreenProvider))
                 } else {
                     playViaBrowser(carContext, browserProvider(), item, TAG)
                     // This screen is the stack root, so the playback screen goes on top
-                    screenManager.push(NowPlayingCarScreen(carContext))
+                    screenManager.push(playbackScreenProvider())
                 }
             }.build()
     }
@@ -303,11 +304,11 @@ internal class LibraryTabCarScreen(
                 carContext.mediaRow(item, artwork[item.mediaId], isPlaying) {
                     if (browsable) {
                         val title = item.mediaMetadata.title?.toString().orEmpty().ifBlank { item.mediaId }
-                        screenManager.push(MediaListCarScreen(carContext, browserProvider, item.mediaId, title))
+                        screenManager.push(MediaListCarScreen(carContext, browserProvider, item.mediaId, title, playbackScreenProvider))
                     } else {
                         playViaBrowser(carContext, browserProvider(), item, TAG)
                         // This screen is the stack root, so the playback screen goes on top
-                        screenManager.push(NowPlayingCarScreen(carContext))
+                        screenManager.push(playbackScreenProvider())
                     }
                 },
             )
@@ -328,7 +329,7 @@ internal class LibraryTabCarScreen(
             // FAB constraint: custom actions must declare a background color
             .setBackgroundColor(CarColor.PRIMARY)
             .setOnClickListener {
-                screenManager.push(SearchCarScreen(carContext, browserProvider))
+                screenManager.push(SearchCarScreen(carContext, browserProvider, playbackScreenProvider))
             }.build()
 
     // Standard identity so the host draws the equalizer panel; navigating on
@@ -337,7 +338,7 @@ internal class LibraryTabCarScreen(
         Action
             .Builder(Action.MEDIA_PLAYBACK)
             .setOnClickListener {
-                screenManager.push(NowPlayingCarScreen(carContext))
+                screenManager.push(playbackScreenProvider())
             }.build()
 
     private data class LibraryTab(

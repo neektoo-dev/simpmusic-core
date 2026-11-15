@@ -575,6 +575,8 @@ fun MediaItem.toGenericMediaItem(): GenericMediaItem =
 fun GenericMediaMetadata.toMedia3MediaMetadata(): MediaMetadata =
     MediaMetadata
         .Builder()
+        // Advertise the supported rating style to legacy assistants as well as Media3 controllers.
+        .setUserRating(androidx.media3.common.ThumbRating())
         .apply {
             title?.let { setTitle(it) }
             artist?.let { setArtist(it) }

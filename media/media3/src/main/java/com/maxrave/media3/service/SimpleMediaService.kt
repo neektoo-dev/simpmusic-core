@@ -7,23 +7,41 @@ import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.os.Binder
 import android.os.IBinder
+import androidx.car.app.connection.CarConnection
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.CommandButton
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaController
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionError
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
 import com.maxrave.common.MEDIA_NOTIFICATION
+import com.maxrave.domain.manager.DataStoreManager
+import com.maxrave.domain.manager.carPinnedPlaylists
+import com.maxrave.domain.data.player.GenericCommandButton
+import com.maxrave.domain.mediaservice.handler.RadioMixState
 import com.maxrave.domain.mediaservice.handler.MediaPlayerHandler
 import com.maxrave.logger.Logger
 import com.maxrave.media3.R
 import com.maxrave.media3.extension.toCommandButton
+import com.maxrave.media3.service.callback.SimpleMediaSessionCallback
 import com.maxrave.media3.utils.CoilBitmapLoader
 import com.maxrave.media3.utils.sizeLimitedForSession
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.runBlocking
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -40,10 +58,39 @@ internal class SimpleMediaService :
     private val coilBitmapLoader: CoilBitmapLoader by inject<CoilBitmapLoader>()
 
     private var mediaSession: MediaLibrarySession? = null
+    private val carControlsScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val simpleMediaSessionCallback: MediaLibrarySession.Callback by inject<MediaLibrarySession.Callback>()
 
     private val simpleMediaServiceHandler: MediaPlayerHandler by inject<MediaPlayerHandler>()
+
+    private val carSettings: DataStoreManager by inject<DataStoreManager>()
+    private var mixConfirmationVisible = false
+    private val mixSuccessFeedback by lazy {
+        MixSuccessFeedback(this, carControlsScope) { visible ->
+            mixConfirmationVisible = visible
+            carMediaButtonLayout.updateButtons(lastNotificationButtons)
+        }
+    }
+    private var lastNotificationButtons = listOf<GenericCommandButton>(GenericCommandButton.Radio)
+    private val carMediaButtonLayout by lazy {
+        CarMediaButtonLayout(CarConnection(this).type) { buttons ->
+            mediaSession?.setMediaButtonPreferences(buttons.map { button ->
+                val command = button.toCommandButton(this)
+                if (button == GenericCommandButton.Radio) {
+                    val mix = simpleMediaServiceHandler.radioMixState.value
+                    val label = when {
+                        mix is RadioMixState.Loading -> getString(R.string.mix_loading)
+                        mix is RadioMixState.Failed -> getString(R.string.mix_retry)
+                        mixConfirmationVisible -> getString(R.string.mix_started)
+                        else -> getString(R.string.radio_mix)
+                    }
+                    CommandButton.Builder(CommandButton.ICON_RADIO).setCustomIconResId(R.drawable.baseline_radio_mix_24)
+                        .setSessionCommand(command.sessionCommand!!).setDisplayName(label).build()
+                } else command
+            })
+        }
+    }
 
     private val binder = MusicBinder()
 
@@ -96,23 +143,52 @@ internal class SimpleMediaService :
                 )
         }
 
-        simpleMediaServiceHandler.onUpdateNotification = { list ->
-            val commandButtonList = list.map { it.toCommandButton(this) }
-            mediaSession?.setMediaButtonPreferences(
-                commandButtonList,
-            )
+        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.onCarBrowseControlsSupported =
+            carMediaButtonLayout::setBrowseControlsSupported
+        simpleMediaServiceHandler.onUpdateNotification = { buttons ->
+            lastNotificationButtons = buttons
+            carMediaButtonLayout.updateButtons(buttons)
         }
+        carControlsScope.launch {
+            // Track metadata can arrive after the notification refresh. Observe both sources so
+            // an already open Controls tab updates when a song starts, changes or is liked.
+            combine(simpleMediaServiceHandler.nowPlayingState, simpleMediaServiceHandler.controlState) { playing, state ->
+                CarBrowseControls.rows(this@SimpleMediaService, playing.songEntity, state, 1)
+            }.distinctUntilChanged().collect { rows ->
+                mediaSession?.notifyChildrenChanged(CarBrowseControls.ROOT, rows.size, null)
+            }
+        }
+        carControlsScope.launch {
+            simpleMediaServiceHandler.radioMixStarted.collect { mixSuccessFeedback.show() }
+        }
+        carControlsScope.launch {
+            simpleMediaServiceHandler.radioMixState.collect { mix ->
+                carMediaButtonLayout.updateButtons(lastNotificationButtons)
+                if (mix is RadioMixState.Failed) {
+                    val message = when (mix.reason) {
+                        RadioMixState.Reason.NETWORK -> R.string.mix_error_network
+                        RadioMixState.Reason.EMPTY -> R.string.mix_error_empty
+                        RadioMixState.Reason.TRACK_CHANGED -> R.string.mix_error_changed
+                        RadioMixState.Reason.PLAYER_BUSY -> R.string.mix_error_busy
+                    }
+                    mediaSession?.sendError(SessionError(SessionError.ERROR_IO, getString(message), Bundle.EMPTY))
+                }
+            }
+        }
+        carControlsScope.launch {
+            combine(carSettings.carPinnedPlaylists(), simpleMediaServiceHandler.nowPlayingState) { pins, playing ->
+                pins to playing.songEntity?.videoId
+            }.distinctUntilChanged().collectLatest {
+                val callback = simpleMediaSessionCallback as? SimpleMediaSessionCallback ?: return@collectLatest
+                val count = withContext(Dispatchers.IO) { callback.carHomeItemCount() }
+                mediaSession?.notifyChildrenChanged(SimpleMediaSessionCallback.HOME, count, null)
+            }
+        }
+        carMediaButtonLayout.start()
 
         val sessionToken = SessionToken(this, ComponentName(this, SimpleMediaService::class.java))
         val controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
         controllerFuture.addListener({ controllerFuture.get() }, MoreExecutors.directExecutor())
-
-        simpleMediaServiceHandler.onUpdateNotification = { list ->
-            val commandButtonList = list.map { it.toCommandButton(this) }
-            mediaSession?.setMediaButtonPreferences(
-                commandButtonList,
-            )
-        }
     }
 
     @UnstableApi
@@ -159,6 +235,10 @@ internal class SimpleMediaService :
 
     @UnstableApi
     override fun onDestroy() {
+        mixSuccessFeedback.close()
+        carControlsScope.cancel()
+        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.onCarBrowseControlsSupported = {}
+        carMediaButtonLayout.stop()
         super.onDestroy()
         Logger.w("Service", "Simple Media Service Destroyed")
         if (simpleMediaServiceHandler.shouldReleaseOnTaskRemoved()) {
@@ -194,6 +274,10 @@ internal class SimpleMediaService :
                 player,
                 callback,
             ).setId(this.javaClass.name)
+            // Make Radio/Mix available even when a car reconnects to an already paused player,
+            // before the handler next refreshes the full notification action list.
+            .setMediaButtonPreferences(listOf(GenericCommandButton.Radio.toCommandButton(service)))
+            .setCommandButtonsForMediaItems(CarBrowseControls.commandButtons(service))
             // Capped at the platform's own artwork limit so the framework never rescales the shared
             // bitmap in setMetadata — see sizeLimitedForSession (#2500). Falls back to the plain
             // loader if the limit cannot be read.

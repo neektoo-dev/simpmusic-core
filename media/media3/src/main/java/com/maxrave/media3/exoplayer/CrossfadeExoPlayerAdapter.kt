@@ -55,6 +55,8 @@ import com.maxrave.media3.exoplayer.CrossfadeExoPlayerAdapter.Companion.SPEED_PI
 import com.maxrave.media3.service.mediasourcefactory.MergingMediaSourceFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -497,6 +499,22 @@ internal class CrossfadeExoPlayerAdapter(
                 override fun setPlayWhenReady(playWhenReady: Boolean) {
                     this@CrossfadeExoPlayerAdapter.playWhenReady = playWhenReady
                 }
+
+                override fun stop(): Unit = this@CrossfadeExoPlayerAdapter.stop()
+
+                override fun seekTo(positionMs: Long): Unit = this@CrossfadeExoPlayerAdapter.seekTo(positionMs)
+
+                override fun seekBack(): Unit = this@CrossfadeExoPlayerAdapter.seekBack()
+
+                override fun seekForward(): Unit = this@CrossfadeExoPlayerAdapter.seekForward()
+
+                override var repeatMode: Int
+                    get() = this@CrossfadeExoPlayerAdapter.repeatMode
+                    set(value) { this@CrossfadeExoPlayerAdapter.repeatMode = value }
+
+                override var shuffleModeEnabled: Boolean
+                    get() = this@CrossfadeExoPlayerAdapter.shuffleModeEnabled
+                    set(value) { this@CrossfadeExoPlayerAdapter.shuffleModeEnabled = value }
             }
     }
 
@@ -793,9 +811,13 @@ internal class CrossfadeExoPlayerAdapter(
             return
         }
         coroutineScope.launch {
+            internalPlayWhenReady = false
+            currentLoadJob?.cancel()
+            if (isCrossfading) commitIncomingAsCurrentInternal()
             forwardingPlayer.suppressPlaybackEnded = false
             currentPlayer?.let { player ->
                 Logger.d(TAG, "Stop called")
+                player.playWhenReady = false
                 player.stop()
                 transitionToState(InternalState.IDLE)
                 stopPositionUpdates()
@@ -1109,6 +1131,30 @@ internal class CrossfadeExoPlayerAdapter(
      * than guessed at, since getting it wrong stops playback. [onRemoved] hears back exactly once
      * either way, from inside this block — see [MediaPlayerInterface.removeMediaItems] for why.
      */
+    override suspend fun replaceQueueKeepingCurrent(
+        seedId: String,
+        upcoming: List<GenericMediaItem>,
+        onReplaced: () -> Unit,
+    ): Boolean = withContext(Dispatchers.Main.immediate) {
+        val active = playlist.getOrNull(localCurrentMediaItemIndex)
+        // A transition or remote queue owns another set of indices: retry when local and stable.
+        if (isCastActive || isCrossfading || active?.mediaId?.removePrefix(MERGING_DATA_TYPE.VIDEO) != seedId) {
+            return@withContext false
+        }
+        playlist.clear()
+        playlist.add(active)
+        playlist.addAll(upcoming)
+        localCurrentMediaItemIndex = 0
+        pinnedNextItems.clear()
+        if (internalShuffleModeEnabled) createShuffleOrder()
+        onReplaced()
+        notifyTimelineChanged("TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED")
+        // Keep the current ExoPlayer: no prepare, seek, pause or play request is sent to it.
+        clearPrecacheExceptCurrentInternal()
+        coroutineScope.launch { triggerPrecachingInternal() }
+        true
+    }
+
     override fun removeMediaItems(
         fromIndex: Int,
         toIndex: Int,
@@ -1447,6 +1493,7 @@ internal class CrossfadeExoPlayerAdapter(
 
             val mediaItemList = getShuffledMediaItemList()
             listeners.forEach { it.onShuffleModeEnabledChanged(value, mediaItemList) }
+            forwardingPlayer.notifyPlaybackModesChanged()
             notifyTimelineChanged("TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED")
 
             Logger.d(TAG, "Shuffle mode ${if (value) "enabled" else "disabled"}")
@@ -1458,6 +1505,7 @@ internal class CrossfadeExoPlayerAdapter(
             if (internalRepeatMode == value) return
             internalRepeatMode = value
             listeners.forEach { it.onRepeatModeChanged(value) }
+            forwardingPlayer.notifyPlaybackModesChanged()
         }
 
     override var playWhenReady: Boolean

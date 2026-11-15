@@ -38,6 +38,7 @@ import org.koin.core.component.inject
 internal class SearchCarScreen(
     carContext: CarContext,
     private val browserProvider: () -> ListenableFuture<MediaBrowser>,
+    private val playbackScreenProvider: () -> Screen,
 ) : Screen(carContext),
     KoinComponent {
     private val handler: MediaPlayerHandler by inject()
@@ -92,7 +93,7 @@ internal class SearchCarScreen(
                         playViaBrowser(carContext, browserProvider(), item, TAG)
                         // Land back on the playback screen, matching the classic surface
                         screenManager.popToRoot()
-                        screenManager.push(NowPlayingCarScreen(carContext))
+                        screenManager.push(playbackScreenProvider())
                     },
                 )
             }

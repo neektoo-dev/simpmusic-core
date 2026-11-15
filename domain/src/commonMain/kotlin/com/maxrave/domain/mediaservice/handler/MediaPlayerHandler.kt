@@ -29,6 +29,8 @@ interface MediaPlayerHandler {
     val skipSegments: StateFlow<List<SponsorSkipSegments>?>
     val format: StateFlow<NewFormatEntity?>
     val currentSongIndex: StateFlow<Int>
+    val radioMixState: StateFlow<RadioMixState> get() = NO_RADIO_MIX_STATE
+    val radioMixStarted: kotlinx.coroutines.flow.Flow<Unit> get() = kotlinx.coroutines.flow.emptyFlow()
     val castState: StateFlow<GenericCastState>
 
     // Listeners
@@ -413,3 +415,4 @@ sealed class ToastType(
         val category: String,
     ) : ToastType(category)
 }
+private val NO_RADIO_MIX_STATE: StateFlow<RadioMixState> = kotlinx.coroutines.flow.MutableStateFlow(RadioMixState.Idle)

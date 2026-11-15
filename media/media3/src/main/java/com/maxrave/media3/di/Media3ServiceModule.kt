@@ -244,6 +244,8 @@ private val mediaServiceModule =
                 get<PlaylistRepository>(),
                 get<HomeRepository>(),
                 get<StreamRepository>(),
+                get<com.maxrave.domain.repository.AlbumRepository>(),
+                get<DataStoreManager>(),
             )
         }
 

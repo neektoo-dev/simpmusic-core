@@ -152,7 +152,8 @@ fun GenericCommandButton.toCommandButton(context: Context): CommandButton =
             CommandButton
                 .Builder(
                     CommandButton.ICON_RADIO,
-                ).setDisplayName(context.getString(R.string.radio))
+                ).setCustomIconResId(R.drawable.baseline_radio_mix_24)
+                .setDisplayName(context.getString(R.string.radio_mix))
                 .setSessionCommand(
                     SessionCommand(
                         MEDIA_CUSTOM_COMMAND.RADIO,

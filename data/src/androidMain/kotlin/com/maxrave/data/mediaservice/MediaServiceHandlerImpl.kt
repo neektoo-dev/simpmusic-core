@@ -54,6 +54,7 @@ import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.manager.DataStoreManager.Values.FALSE
 import com.maxrave.domain.manager.DataStoreManager.Values.TRUE
 import com.maxrave.domain.mediaservice.handler.ControlState
+import com.maxrave.domain.mediaservice.handler.RadioMixController
 import com.maxrave.domain.mediaservice.handler.MediaPlayerHandler
 import com.maxrave.domain.mediaservice.handler.NowPlayingTrackState
 import com.maxrave.domain.mediaservice.handler.PlayerEvent
@@ -969,10 +970,11 @@ internal class MediaServiceHandlerImpl(
                 _controlState.value = _controlState.value.copy(isLiked = liked)
                 onUpdateNotification.invoke(
                     listOf(
+                        // Android Auto gives the first custom actions the most visible positions.
+                        GenericCommandButton.Radio,
                         GenericCommandButton.Like(liked),
                         GenericCommandButton.Shuffle(isShuffled = _controlState.value.isShuffle),
                         GenericCommandButton.Repeat(repeatState = _controlState.value.repeatState),
-                        GenericCommandButton.Radio,
                     ),
                 )
             }
@@ -1150,44 +1152,42 @@ internal class MediaServiceHandlerImpl(
         }
     }
 
-    override fun toggleRadio() {
-        coroutineScope.launch {
-            val currentSong = nowPlayingState.value.songEntity ?: return@launch
-            Logger.d(TAG, "toggleRadio: ${currentSong.title}")
-            songRepository
-                .getRadioFromEndpoint(
-                    YouTubeWatchEndpoint(
-                        videoId = currentSong.videoId,
-                        playlistId = "RDAMVM${currentSong.videoId}",
-                    ),
-                ).collectLatest { res ->
-                    val data = res.data
-                    when (res) {
-                        is Resource.Success if (data != null && data.first.isNotEmpty()) -> {
-                            setQueueData(
-                                QueueData.Data(
-                                    listTracks = data.first,
-                                    firstPlayedTrack = data.first.first(),
-                                    playlistId = "RDAMVM${currentSong.videoId}",
-                                    playlistName = "\"${currentSong.title}\" Radio",
-                                    playlistType = PlaylistType.RADIO,
-                                    continuation = data.second,
-                                ),
-                            )
-                            clearMediaItems()
-                            currentSong.durationSeconds.let {
-                                songRepository.updateDurationSeconds(it, currentSong.videoId)
-                            }
-                            addMediaItem(currentSong.toGenericMediaItem(), playWhenReady = true)
-                            loadPlaylistOrAlbum(0)
-                        }
+    private val radioMixController by lazy { RadioMixController(coroutineScope) }
+    override val radioMixState get() = radioMixController.state
+    override val radioMixStarted get() = radioMixController.started
 
-                        else -> {
-                            Logger.e(TAG, "toggleRadio: ${res.message}")
-                        }
+    override fun toggleRadio() {
+        val song = nowPlayingState.value.songEntity ?: return
+        val sourcePlaylist = queueData.value.data.playlistId
+        radioMixController.start(
+            seed = song.toTrack(),
+            isCurrent = {
+                player.currentMediaItem?.mediaId?.removePrefix(MERGING_DATA_TYPE.VIDEO) == song.videoId &&
+                    queueData.value.data.playlistId == sourcePlaylist
+            },
+            fetch = { songRepository.getRadioFromEndpoint(YouTubeWatchEndpoint(videoId = song.videoId, playlistId = "RDAMVM${song.videoId}")) },
+            apply = { tracks, continuation ->
+                val mixQueue = QueueData.Data(
+                    listTracks = tracks, firstPlayedTrack = tracks.first(), playlistId = "RDAMVM${song.videoId}",
+                    playlistName = "\"${song.title}\" Radio", playlistType = PlaylistType.RADIO, continuation = continuation,
+                )
+                if (_castState.value.isRemote) {
+                    // Cast owns a resolved remote queue; retain its existing reload path.
+                    setQueueData(mixQueue)
+                    clearMediaItems()
+                    addMediaItem(song.toGenericMediaItem(), playWhenReady = true)
+                    loadPlaylistOrAlbum(0)
+                    true
+                } else {
+                    player.replaceQueueKeepingCurrent(song.videoId, tracks.drop(1).map { it.toGenericMediaItem() }) {
+                        loadJob?.cancel()
+                        setQueueData(mixQueue)
+                        _queueData.update { it.copy(queueState = QueueData.StateSource.STATE_INITIALIZED) }
+                        _currentSongIndex.value = 0
                     }
                 }
-        }
+            },
+        )
     }
 
     override fun toggleLike() {

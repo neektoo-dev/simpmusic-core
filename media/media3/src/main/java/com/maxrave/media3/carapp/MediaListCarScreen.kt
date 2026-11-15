@@ -42,6 +42,7 @@ internal class MediaListCarScreen(
     private val browserProvider: () -> ListenableFuture<MediaBrowser>,
     private val parentId: String,
     private val screenTitle: String,
+    private val playbackScreenProvider: () -> Screen,
 ) : Screen(carContext),
     KoinComponent {
     private val handler: MediaPlayerHandler by inject()
@@ -101,7 +102,7 @@ internal class MediaListCarScreen(
                         .Builder(Action.MEDIA_PLAYBACK)
                         .setOnClickListener {
                             screenManager.popToRoot()
-                            screenManager.push(NowPlayingCarScreen(carContext))
+                            screenManager.push(playbackScreenProvider())
                         }.build(),
                 ).setHeader(
                     Header
@@ -126,12 +127,12 @@ internal class MediaListCarScreen(
                 carContext.mediaRow(item, artwork[item.mediaId], isPlaying) {
                     if (browsable) {
                         val title = item.mediaMetadata.title?.toString().orEmpty().ifBlank { item.mediaId }
-                        screenManager.push(MediaListCarScreen(carContext, browserProvider, item.mediaId, title))
+                        screenManager.push(MediaListCarScreen(carContext, browserProvider, item.mediaId, title, playbackScreenProvider))
                     } else {
                         playViaBrowser(carContext, browserProvider(), item, TAG)
                         // Land back on the playback screen, matching the classic surface
                         screenManager.popToRoot()
-                        screenManager.push(NowPlayingCarScreen(carContext))
+                        screenManager.push(playbackScreenProvider())
                     }
                 },
             )

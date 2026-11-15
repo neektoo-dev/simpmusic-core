@@ -6,6 +6,7 @@ import androidx.car.app.media.model.MediaPlaybackTemplate
 import androidx.car.app.model.Action
 import androidx.car.app.model.CarIcon
 import androidx.car.app.model.Header
+import androidx.car.app.model.MessageTemplate
 import androidx.car.app.model.Template
 import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -29,6 +30,8 @@ import org.koin.core.component.inject
  */
 internal class NowPlayingCarScreen(
     carContext: CarContext,
+    private val isPlaybackReady: () -> Boolean,
+    private val retryConnection: () -> Unit,
 ) : Screen(carContext),
     KoinComponent {
     private val handler: MediaPlayerHandler by inject()
@@ -48,6 +51,17 @@ internal class NowPlayingCarScreen(
     }
 
     override fun onGetTemplate(): Template {
+        if (!isPlaybackReady()) {
+            // A MediaPlaybackTemplate is invalid until the host has our session token.
+            return MessageTemplate.Builder(carContext.getString(R.string.car_connecting))
+                .setHeaderAction(Action.BACK)
+                .addAction(
+                    Action.Builder()
+                        .setTitle(carContext.getString(R.string.car_retry))
+                        .setOnClickListener { retryConnection() }
+                        .build(),
+                ).build()
+        }
         val queueTitle =
             handler.queueData.value
                 ?.data

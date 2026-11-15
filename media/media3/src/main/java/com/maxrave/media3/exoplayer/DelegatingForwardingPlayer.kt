@@ -5,6 +5,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.TextureView
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.FlagSet
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -83,6 +84,18 @@ internal class DelegatingForwardingPlayer(
         fun pause()
 
         fun setPlayWhenReady(playWhenReady: Boolean)
+
+        fun stop()
+
+        fun seekTo(positionMs: Long)
+
+        fun seekBack()
+
+        fun seekForward()
+
+        var repeatMode: Int
+
+        var shuffleModeEnabled: Boolean
     }
 
     /**
@@ -350,6 +363,68 @@ internal class DelegatingForwardingPlayer(
     override fun setPlayWhenReady(playWhenReady: Boolean) {
         val nav = playlistNavigationProvider
         if (nav != null) nav.setPlayWhenReady(playWhenReady) else super.setPlayWhenReady(playWhenReady)
+    }
+
+    override fun stop() {
+        val nav = playlistNavigationProvider
+        if (nav != null) nav.stop() else super.stop()
+    }
+
+    override fun seekTo(positionMs: Long) {
+        val nav = playlistNavigationProvider
+        if (nav != null) nav.seekTo(positionMs) else super.seekTo(positionMs)
+    }
+
+    override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
+        // MediaSession exposes the delegate's one-item timeline, not the adapter's playlist.
+        if (playlistNavigationProvider != null && mediaItemIndex == super.getCurrentMediaItemIndex()) {
+            playlistNavigationProvider?.seekTo(positionMs)
+        } else {
+            super.seekTo(mediaItemIndex, positionMs)
+        }
+    }
+
+    override fun seekToDefaultPosition() {
+        if (playlistNavigationProvider != null && !isCurrentMediaItemLive) seekTo(0L) else super.seekToDefaultPosition()
+    }
+
+    override fun seekToDefaultPosition(mediaItemIndex: Int) {
+        if (mediaItemIndex == super.getCurrentMediaItemIndex()) seekToDefaultPosition() else super.seekToDefaultPosition(mediaItemIndex)
+    }
+
+    override fun seekBack() {
+        val nav = playlistNavigationProvider
+        if (nav != null) nav.seekBack() else super.seekBack()
+    }
+
+    override fun seekForward() {
+        val nav = playlistNavigationProvider
+        if (nav != null) nav.seekForward() else super.seekForward()
+    }
+
+    override fun getRepeatMode(): Int = playlistNavigationProvider?.repeatMode ?: super.getRepeatMode()
+
+    override fun setRepeatMode(repeatMode: Int) {
+        val nav = playlistNavigationProvider
+        if (nav != null) nav.repeatMode = repeatMode else super.setRepeatMode(repeatMode)
+    }
+
+    override fun getShuffleModeEnabled(): Boolean = playlistNavigationProvider?.shuffleModeEnabled ?: super.getShuffleModeEnabled()
+
+    override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
+        val nav = playlistNavigationProvider
+        if (nav != null) nav.shuffleModeEnabled = shuffleModeEnabled else super.setShuffleModeEnabled(shuffleModeEnabled)
+    }
+
+    fun notifyPlaybackModesChanged() {
+        val events = Player.Events(
+            FlagSet.Builder().add(Player.EVENT_REPEAT_MODE_CHANGED).add(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED).build(),
+        )
+        trackedListeners.toList().forEach {
+            it.onRepeatModeChanged(repeatMode)
+            it.onShuffleModeEnabledChanged(shuffleModeEnabled)
+            it.onEvents(this, events)
+        }
     }
 
     // NOTE: Do NOT override getMediaItemCount() or getCurrentMediaItemIndex() here.
